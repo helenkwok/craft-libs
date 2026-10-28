@@ -1,0 +1,21 @@
+{
+  "name": "@craft/app",
+  "version": "0.1.0",
+  "description": "Embed a Craft app's web build in a page and talk to it: vanilla, web component and React faces over one implementation.",
+  "type": "module",
+  "license": "MIT OR Apache-2.0",
+  "exports": {
+    ".": "./core.js",
+    "./element": "./element.js",
+    "./react": "./react.js"
+  },
+  "types": "./index.d.ts",
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  }
+}
