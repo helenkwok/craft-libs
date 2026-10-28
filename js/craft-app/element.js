@@ -84,10 +84,12 @@ export class CraftAppElement extends HTMLElement {
     if (this.#handle?.app === app && this.#frameSrc === src) return;
     this.#frameSrc = src;
     this.#teardown();
+    this.#abort = new AbortController();
     const mounting = mountCraftApp(this.#container, {
       app,
       src,
       storage: this.#storage,
+      signal: this.#abort.signal,
     });
     this.#mounting = mounting;
     mounting.then(
@@ -133,7 +135,12 @@ export class CraftAppElement extends HTMLElement {
     this.dispatchEvent(new CustomEvent(name, { detail, bubbles: true, composed: true }));
   }
 
+  /** Cancels the mount in flight, which removes its frame at once. */
+  #abort = null;
+
   #teardown() {
+    this.#abort?.abort();
+    this.#abort = null;
     for (const off of this.#offs) off();
     this.#offs = [];
     this.#handle?.destroy();

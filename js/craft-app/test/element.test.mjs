@@ -70,10 +70,10 @@ test('a mount replaced by a newer one never comes back', async () => {
   windows.set('/b/', appWindow('/b/'));
   const ready = next(el, 'craft-ready');
   el.setAttribute('src', '/b/');
+  assert.ok(frameA.removed >= 1, 'the superseded frame is removed at once, not when it would have loaded');
   await ready;
   windows.set('/a/', appWindow('/a/')); // the first app finishes loading after all
   await new Promise((resolve) => setTimeout(resolve, 250));
-  assert.equal(frameA.removed, 1, 'the superseded frame is removed');
   assert.equal((await el.request('x')).src, '/b/', 'calls go to the current app');
   el.destroy();
 });
@@ -98,6 +98,7 @@ test('a mount that fails fires craft-failed, and mount() can try again', async (
   el.setAttribute('src', '/d/');
   el.connectedCallback();
   assert.deepEqual(await failed, { error: 'the frame is not readable' });
+  assert.equal(frames.at(-1).removed, 1, 'the failed frame is removed before a retry adds another');
   windows.set('/d/', appWindow('/d/'));
   const ready = next(el, 'craft-ready');
   el.mount();

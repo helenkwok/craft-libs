@@ -19,6 +19,8 @@ export interface MountOptions {
   timeout?: number;
   /** The document to create the iframe in (tests inject a fake). */
   document?: Document;
+  /** Aborting it while the app is still loading removes the frame and rejects the mount. */
+  signal?: AbortSignal;
 }
 
 export interface CraftAppHandle {
@@ -33,7 +35,7 @@ export interface CraftAppHandle {
    * before the handle exists: await `mountCraftApp` instead.)
    * `save` forwards the app's `<app>:save` (the app handing a file over). `saved` is reserved for
    * a host-confirmed save and is not emitted yet. */
-  on(event: 'ready' | 'failed' | 'dirty' | 'save', fn: (detail: Record<string, unknown>) => void): () => void;
+  on(event: 'dirty' | 'save', fn: (detail: Record<string, unknown>) => void): () => void;
   /** Remove the frame and every listener. */
   destroy(): void;
 }

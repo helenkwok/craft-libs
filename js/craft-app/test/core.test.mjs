@@ -50,7 +50,8 @@ function fakeDocument({ appWindow }) {
           const i = list.indexOf(fn);
           if (i >= 0) list.splice(i, 1);
         },
-        remove() {},
+        removed: 0,
+        remove() { this.removed += 1; },
         dispatch(name, detail) {
           for (const fn of listeners.get(name) ?? []) fn({ detail });
         },
@@ -309,4 +310,26 @@ test('events on the app\'s own document are forwarded, not the blank one the fra
   handle.destroy();
   appDocument.dispatch('vectorcraft:dirty', { dirty: false });
   assert.deepEqual(seen, [{ dirty: true }], 'destroy removes it again');
+});
+
+test('a mount whose frame throws while loading removes its frame', async () => {
+  const doc = fakeDocument({ appWindow: { get vectorcraft() { throw new Error('the frame is not readable'); } } });
+  const container = fakeContainer();
+  const mounting = mountCraftApp(container, { app: 'vectorcraft', src: '/v/', document: doc, timeout: 5000 });
+  await assert.rejects(mounting, /the frame is not readable/);
+  assert.equal(container.appended[0].removed, 1);
+});
+
+test('aborting a mount while the app loads removes the frame at once and rejects', async () => {
+  const doc = fakeDocument({ appWindow: null }); // still loading
+  const container = fakeContainer();
+  const abort = new AbortController();
+  const mounting = mountCraftApp(container, { app: 'vectorcraft', src: '/v/', document: doc, timeout: 5000, signal: abort.signal });
+  let removed = 0;
+  container.appended[0].remove = () => { removed += 1; };
+  const started = Date.now();
+  abort.abort(new Error('replaced'));
+  assert.ok(removed >= 1, 'the frame goes as soon as the signal aborts');
+  await assert.rejects(mounting, /replaced/);
+  assert.ok(Date.now() - started < 1000, 'no waiting for the timeout');
 });

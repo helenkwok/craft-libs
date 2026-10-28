@@ -23,6 +23,8 @@
  * @property {Object|null} [storage] The page's `craftStorage`, handed to the frame.
  * @property {number} [timeout=180000] Milliseconds to wait for the app to appear in the frame.
  * @property {Document} [document] The document to create the iframe in (tests inject a fake).
+ * @property {AbortSignal} [signal] Aborting it while the app is still loading removes the frame and
+ *   rejects the mount with the signal's reason.
  */
 
 /**
@@ -48,7 +50,7 @@ const APP_POLL_MS = 100;
  * @returns {Promise<CraftAppHandle>} Resolves with the handle once the app answered; rejects
  *   through the `failed` event path when the app does not appear within `timeout`.
  */
-export async function mountCraftApp(container, { app, src, storage = null, timeout = 180000, document: doc = globalThis.document }) {
+export async function mountCraftApp(container, { app, src, storage = null, timeout = 180000, document: doc = globalThis.document, signal }) {
   const frame = doc.createElement('iframe');
   frame.src = src;
   frame.title = app;
@@ -124,22 +126,35 @@ export async function mountCraftApp(container, { app, src, storage = null, timeo
     }
   };
 
-  // Wait until the app's global exists with a `request` function.
+  // Wait until the app's global exists with a `request` function. The caller gets no handle when
+  // this fails or is aborted, so nothing else could remove the frame: every way out removes it.
+  const giveUp = (error) => {
+    destroyed = true;
+    frame.remove();
+    throw error;
+  };
+  const onAbort = () => { destroyed = true; frame.remove(); };
+  signal?.addEventListener('abort', onAbort, { once: true });
   const deadline = Date.now() + timeout;
   let window_app = null;
-  while (Date.now() < deadline) {
-    window_app = frame.contentWindow?.[app] ?? null;
-    if (window_app && typeof window_app.request === 'function') break;
-    await new Promise((resolve) => setTimeout(resolve, APP_POLL_MS));
-    window_app = null;
+  try {
+    while (Date.now() < deadline) {
+      if (signal?.aborted) break;
+      window_app = frame.contentWindow?.[app] ?? null;
+      if (window_app && typeof window_app.request === 'function') break;
+      await new Promise((resolve) => setTimeout(resolve, APP_POLL_MS));
+      window_app = null;
+    }
+  } catch (error) {
+    signal?.removeEventListener('abort', onAbort);
+    giveUp(error); // reading the frame threw
   }
+  signal?.removeEventListener('abort', onAbort);
+  if (signal?.aborted) giveUp(signal.reason ?? new Error(`${app} mount was aborted`));
   if (!window_app || typeof window_app.request !== 'function') {
     const error = `${app} did not appear in the frame within ${Math.round(timeout / 1000)} s`;
     emit('failed', { error });
-    // The caller gets no handle, so nothing else could remove the frame.
-    destroyed = true;
-    frame.remove();
-    throw new Error(error);
+    giveUp(new Error(error));
   }
 
   // Hand the page's storage to the frame before anything else can run.
