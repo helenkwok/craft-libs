@@ -274,3 +274,39 @@ test('destroy removes the frame and stops the listeners', async () => {
 function handle_destroy(frame) {
   frame.contentWindow = null;
 }
+
+test('a mount that times out removes its frame', async () => {
+  const doc = fakeDocument({ appWindow: null }); // the app never appears
+  const container = fakeContainer();
+  const mounting = mountCraftApp(container, { app: 'vectorcraft', src: '/v/', document: doc, timeout: 300 });
+  let removed = 0;
+  container.appended[0].remove = () => { removed += 1; };
+  await assert.rejects(mounting, /did not appear in the frame within/);
+  assert.equal(removed, 1, 'the caller gets no handle, so the core removes the frame');
+});
+
+test('events on the app\'s own document are forwarded, not the blank one the frame starts with', async () => {
+  const api = fakeApp();
+  const doc = fakeDocument({ appWindow: {} });
+  const container = fakeContainer();
+  const mounting = mountCraftApp(container, { app: 'vectorcraft', src: '/v/', document: doc, timeout: 5000 });
+  // The app loads: its document replaces the frame's first one, and its global appears.
+  const listeners = new Map();
+  const appDocument = {
+    addEventListener(name, fn) { listeners.set(name, [...(listeners.get(name) ?? []), fn]); },
+    removeEventListener(name, fn) { listeners.set(name, (listeners.get(name) ?? []).filter((f) => f !== fn)); },
+    dispatch(name, detail) { for (const fn of listeners.get(name) ?? []) fn({ detail }); },
+  };
+  setTimeout(() => {
+    doc.appWindow.document = appDocument;
+    doc.appWindow.vectorcraft = api;
+  }, 150);
+  const handle = await mounting;
+  const seen = [];
+  handle.on('dirty', (detail) => seen.push(detail));
+  appDocument.dispatch('vectorcraft:dirty', { dirty: true });
+  assert.deepEqual(seen, [{ dirty: true }], 'the listener is on the document the app dispatches on');
+  handle.destroy();
+  appDocument.dispatch('vectorcraft:dirty', { dirty: false });
+  assert.deepEqual(seen, [{ dirty: true }], 'destroy removes it again');
+});

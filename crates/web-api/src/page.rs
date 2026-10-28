@@ -4,7 +4,6 @@
 //! Every function goes through one path, [`PageApi::call`], with the page's timeout; replies
 //! resolve with the method's `result` or reject with an `Error` carrying `error`.
 
-use std::cell::RefCell;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -140,7 +139,7 @@ impl PageApi {
     /// with the page's timeout. If the app does not answer within the timeout, the error says so —
     /// a hidden tab answers when it is shown again.
     async fn call(&self, method: &str, params: Value) -> Value {
-        let (timeout, cancel) = timeout_promise(self.timeout_ms);
+        let timeout = Timeout::new(self.timeout_ms);
         let request = self.request.clone();
         let method = method.to_string();
         let sent = method.clone();
@@ -148,9 +147,9 @@ impl PageApi {
             let reply = request(sent, params).await;
             Ok(to_js(&reply))
         });
-        let raced = js_sys::Promise::race(&js_sys::Array::of2(&reply, &timeout));
+        let raced = js_sys::Promise::race(&js_sys::Array::of2(&reply, &timeout.promise));
         let outcome = JsFuture::from(raced).await;
-        let _ = cancel.call0(&JsValue::NULL); // clear the timer once the race is over
+        drop(timeout); // clear the timer and free its callback once the race is over
         match outcome {
             Err(_) => json!({
                 "ok": false,
@@ -176,27 +175,36 @@ fn screenshot_params(mut params: Value) -> Value {
     }
 }
 
-/// A promise that rejects `ms` milliseconds from now, and a cancel function that clears the timer
-/// (harmless once fired). The timer comes from `setTimeout` on the global object, reached through
-/// `Reflect` — no web-sys, so the crate keeps working in any JS realm.
-fn timeout_promise(ms: f64) -> (js_sys::Promise, js_sys::Function) {
-    let cancel_slot = Rc::new(RefCell::new(None::<js_sys::Function>));
-    let slot = cancel_slot.clone();
-    let promise = js_sys::Promise::new(&mut |_resolve: js_sys::Function, reject: js_sys::Function| {
-        let fire = Closure::<dyn FnMut()>::new(move || {
-            let _ = reject.call1(&JsValue::NULL, &JsValue::NULL);
+/// A promise that rejects `ms` milliseconds from now. Dropping it clears the timer (harmless once
+/// fired) and frees the timer's callback, so a call leaves nothing behind. The timer comes from
+/// `setTimeout` on the global object, reached through `Reflect` — no web-sys, so the crate keeps
+/// working in any JS realm.
+struct Timeout {
+    promise: js_sys::Promise,
+    id: f64,
+    _fire: Option<Closure<dyn FnMut()>>,
+}
+
+impl Timeout {
+    fn new(ms: f64) -> Self {
+        let mut fire = None;
+        let mut id = f64::INFINITY;
+        // `Promise::new` runs its executor before returning, so `fire` and `id` are set here.
+        let promise = js_sys::Promise::new(&mut |_resolve: js_sys::Function, reject: js_sys::Function| {
+            let callback = Closure::<dyn FnMut()>::new(move || {
+                let _ = reject.call1(&JsValue::NULL, &JsValue::NULL);
+            });
+            id = set_timeout(callback.as_ref().clone(), ms);
+            fire = Some(callback);
         });
-        let id = set_timeout(fire.into_js_value(), ms);
-        let clear = Closure::<dyn FnMut()>::new(move || {
-            clear_timeout(id);
-        });
-        let cancel: js_sys::Function = clear.into_js_value().unchecked_into();
-        *slot.borrow_mut() = Some(cancel);
-    });
-    // `Promise::new` runs its executor before returning, so the slot is filled; a no-op stands in
-    // rather than a panic if a realm ever defers it.
-    let cancel = cancel_slot.borrow_mut().take().unwrap_or_else(|| Closure::<dyn FnMut()>::new(|| {}).into_js_value().unchecked_into());
-    (promise, cancel)
+        Self { promise, id, _fire: fire }
+    }
+}
+
+impl Drop for Timeout {
+    fn drop(&mut self) {
+        clear_timeout(self.id);
+    }
 }
 
 /// The `setTimeout` global, reached through the global object + `Reflect` (no web-sys). Returns the

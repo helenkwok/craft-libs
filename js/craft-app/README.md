@@ -53,15 +53,16 @@ elements are unreliable after hydration.
 
 ## Events
 
-`ready`, `failed` (`{error}`), `dirty` and `save` on the handle; `craft-ready`, `craft-failed`,
-`craft-dirty` and `craft-save` (bubbled, composed) on the element. `dirty`/`save` forward the
+`dirty` and `save` on the handle (`mountCraftApp` itself resolves once the app is ready and
+rejects with the error when it is not); `craft-ready`, `craft-failed` (`{error}`), `craft-dirty`
+and `craft-save` (bubbled, composed) on the element. `dirty`/`save` forward the
 app's `<app>:dirty` / `<app>:save` `CustomEvent`s with their `detail` — `save` is the app handing
 a file over, not a confirmation that anything was stored. `saved` is reserved for a
 host-confirmed save; it is not emitted yet.
 
 ## Lifecycle: destroy, not disconnect
 
-When you are done with the app, call `element.destroy()` on `<craft-app>` (or `handle.destroy()` on the vanilla handle) — it unsubscribes the listeners, destroys the handle and removes the frame; calling it twice is safe, and after it, connecting the element again mounts a fresh app. Leaving the DOM alone never tears the app down: a move can take longer than a microtask, and tearing down on disconnect would kill a running editor with unsaved work, so `disconnectedCallback` only records that the element is disconnected and the same mounted app survives a move. React's `<CraftApp>` calls `destroy()` in its unmount cleanup, so unmounting the component frees the app.
+When you are done with the app, call `element.destroy()` on `<craft-app>` (or `handle.destroy()` on the vanilla handle) — it unsubscribes the listeners, destroys the handle and removes the frame; calling it twice is safe, and after it, connecting the element again or calling `element.mount()` mounts a fresh app (`mount()` does nothing while an app is mounted or mounting). Leaving the DOM alone never tears the app down: a move can take longer than a microtask, and tearing down on disconnect would kill a running editor with unsaved work, so `disconnectedCallback` only records that the element is disconnected and the same mounted app survives a move. React's `<CraftApp>` calls `mount()` in an effect and `destroy()` in its cleanup, so unmounting the component frees the app, and StrictMode's second run of the effect brings it back.
 
 ## Relation to the Rust crate
 

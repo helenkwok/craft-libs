@@ -59,8 +59,7 @@ export class CraftAppElement extends HTMLElement {
     this.#connected = true;
     // Safe to repeat: mount only when no app is mounted or mounting. A repeated connect (the
     // element coming back after a move) must not restart a running app.
-    if (this.#mounting || this.#handle) return;
-    this.#mount();
+    this.mount();
   }
 
   #connected = false;
@@ -85,20 +84,40 @@ export class CraftAppElement extends HTMLElement {
     if (this.#handle?.app === app && this.#frameSrc === src) return;
     this.#frameSrc = src;
     this.#teardown();
-    this.#mounting = mountCraftApp(this.#container, {
+    const mounting = mountCraftApp(this.#container, {
       app,
       src,
       storage: this.#storage,
     });
-    this.#mounting
-      .then((handle) => {
+    this.#mounting = mounting;
+    mounting.then(
+      (handle) => {
+        // A mount replaced by a newer one, or ended by destroy(), must not come back.
+        if (this.#mounting !== mounting) {
+          handle.destroy();
+          return;
+        }
         this.#handle = handle;
+        this.#applySeams(); // storage set while the mount was in flight
         for (const [event, name] of Object.entries(EVENTS)) {
           this.#offs.push(handle.on(event, (detail) => this.#dispatch(name, detail)));
         }
         this.#dispatch(EVENTS.ready, {});
-      })
-      .catch(() => { /* `failed` was dispatched by the core; stay silent here */ });
+      },
+      (error) => {
+        if (this.#mounting !== mounting) return;
+        this.#mounting = null; // a later mount() or connect can try again
+        this.#dispatch(EVENTS.failed, { error: error?.message ?? String(error) });
+      },
+    );
+  }
+
+  /** Mount when no app is mounted or mounting; safe to call any number of times. The element
+   * mounts itself on connect; this is for a caller that destroyed it and wants it back (React's
+   * effect, which runs twice in StrictMode). */
+  mount() {
+    if (this.#mounting || this.#handle) return;
+    this.#mount();
   }
 
   #frameSrc = null;

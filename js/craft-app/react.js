@@ -72,6 +72,7 @@ export const CraftApp = forwardRef(function CraftApp(
   useEffect(() => {
     const el = innerRef.current;
     if (!el) return;
+    el.mount(); // StrictMode runs this twice: the first cleanup destroyed the app
     return () => el.destroy();
   }, []);
 

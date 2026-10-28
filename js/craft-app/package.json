@@ -5,11 +5,20 @@
   "type": "module",
   "license": "MIT OR Apache-2.0",
   "exports": {
-    ".": "./core.js",
-    "./element": "./element.js",
-    "./react": "./react.js"
+    ".": {
+      "types": "./core.d.ts",
+      "default": "./core.js"
+    },
+    "./element": {
+      "types": "./element.d.ts",
+      "default": "./element.js"
+    },
+    "./react": {
+      "types": "./react.d.ts",
+      "default": "./react.js"
+    }
   },
-  "types": "./index.d.ts",
+  "types": "./core.d.ts",
   "peerDependencies": {
     "react": ">=18"
   },

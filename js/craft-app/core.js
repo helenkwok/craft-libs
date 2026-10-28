@@ -107,13 +107,15 @@ export async function mountCraftApp(container, { app, src, storage = null, timeo
 
   // Forward the app's dirty/save signals to this handle's listeners. `save` is the app handing a
   // file over; `saved` is reserved for a host-confirmed save and is not forwarded (not emitted yet).
-  const forwards = [];
-  for (const [event, name] of [['dirty', `${app}:dirty`], ['save', `${app}:save`]]) {
-    const forward = (e) => emit(event, /** @type {CustomEvent} */ (e).detail);
-    forwards.push([frame.contentWindow, name, forward]);
-    forwards.push([frame.contentWindow?.document ?? null, name, forward]);
-  }
+  // The targets are read once the app is ready: before that the frame still holds its first,
+  // blank document, which the app's own document replaces.
   const attachForwards = () => {
+    const forwards = [];
+    for (const [event, name] of [['dirty', `${app}:dirty`], ['save', `${app}:save`]]) {
+      const forward = (e) => emit(event, /** @type {CustomEvent} */ (e).detail);
+      forwards.push([frame.contentWindow, name, forward]);
+      forwards.push([frame.contentWindow?.document ?? null, name, forward]);
+    }
     for (const [target, name, fn] of forwards) {
       if (typeof target?.addEventListener === 'function') target.addEventListener(name, fn);
       offs.push(() => {
@@ -134,6 +136,9 @@ export async function mountCraftApp(container, { app, src, storage = null, timeo
   if (!window_app || typeof window_app.request !== 'function') {
     const error = `${app} did not appear in the frame within ${Math.round(timeout / 1000)} s`;
     emit('failed', { error });
+    // The caller gets no handle, so nothing else could remove the frame.
+    destroyed = true;
+    frame.remove();
     throw new Error(error);
   }
 
