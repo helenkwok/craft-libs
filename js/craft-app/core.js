@@ -91,10 +91,9 @@ export async function mountCraftApp(container, { app, src, storage = null, timeo
   const win = doc.defaultView ?? globalThis;
   let hostReady;
   const ready = new Promise((resolve) => { hostReady = resolve; });
-  // Settles when the handle is destroyed, so an open() still waiting for `ready` ends at once.
-  let end;
-  const ended = new Promise((_, reject) => { end = reject; });
-  ended.catch(() => {}); // nobody may be waiting on it
+  // The open() calls still waiting for `ready`: destroy() ends each at once. Each removes itself
+  // when its wait settles, so a long-lived handle keeps nothing from opens that finished.
+  const waiting = new Set();
   const onMessage = (e) => {
     if (e.source !== frame.contentWindow) return;
     const data = e.data;
@@ -123,11 +122,15 @@ export async function mountCraftApp(container, { app, src, storage = null, timeo
     screenshot: (params) => call('screenshot', params ?? {}),
     open: async (file, name) => {
       let timer;
+      let stop;
       const info = await Promise.race([
         ready,
-        ended,
-        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${app} did not say it is ready for a document`)), timeout); }),
-      ]).finally(() => clearTimeout(timer));
+        new Promise((_, reject) => {
+          stop = reject;
+          waiting.add(stop);
+          timer = setTimeout(() => reject(new Error(`${app} did not say it is ready for a document`)), timeout);
+        }),
+      ]).finally(() => { clearTimeout(timer); waiting.delete(stop); });
       const blob = typeof file?.arrayBuffer === 'function' && typeof file?.size === 'number';
       name = name ?? file?.name ?? 'document';
       if (blob && info.file === true) {
@@ -151,7 +154,8 @@ export async function mountCraftApp(container, { app, src, storage = null, timeo
     },
     destroy: () => {
       destroyed = true;
-      end(new Error(`${app} handle was destroyed`));
+      for (const stop of waiting) stop(new Error(`${app} handle was destroyed`));
+      waiting.clear();
       for (const off of offs) off();
       listeners.clear();
       frame.remove();
