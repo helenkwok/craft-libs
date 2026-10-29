@@ -91,6 +91,10 @@ export async function mountCraftApp(container, { app, src, storage = null, timeo
   const win = doc.defaultView ?? globalThis;
   let hostReady;
   const ready = new Promise((resolve) => { hostReady = resolve; });
+  // Settles when the handle is destroyed, so an open() still waiting for `ready` ends at once.
+  let end;
+  const ended = new Promise((_, reject) => { end = reject; });
+  ended.catch(() => {}); // nobody may be waiting on it
   const onMessage = (e) => {
     if (e.source !== frame.contentWindow) return;
     const data = e.data;
@@ -118,10 +122,12 @@ export async function mountCraftApp(container, { app, src, storage = null, timeo
     inspect: (params) => call('docInspect', params ?? {}),
     screenshot: (params) => call('screenshot', params ?? {}),
     open: async (file, name) => {
+      let timer;
       const info = await Promise.race([
         ready,
-        new Promise((_, reject) => setTimeout(() => reject(new Error(`${app} did not say it is ready for a document`)), timeout)),
-      ]);
+        ended,
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${app} did not say it is ready for a document`)), timeout); }),
+      ]).finally(() => clearTimeout(timer));
       const blob = typeof file?.arrayBuffer === 'function' && typeof file?.size === 'number';
       name = name ?? file?.name ?? 'document';
       if (blob && info.file === true) {
@@ -145,6 +151,7 @@ export async function mountCraftApp(container, { app, src, storage = null, timeo
     },
     destroy: () => {
       destroyed = true;
+      end(new Error(`${app} handle was destroyed`));
       for (const off of offs) off();
       listeners.clear();
       frame.remove();

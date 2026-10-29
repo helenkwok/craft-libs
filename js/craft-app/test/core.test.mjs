@@ -341,3 +341,14 @@ test('aborting a mount while the app loads removes the frame at once and rejects
   await assert.rejects(mounting, /replaced/);
   assert.ok(Date.now() - started < 1000, 'no waiting for the timeout');
 });
+
+test('an open waiting for ready ends at once when the handle is destroyed, and leaves no timer', async () => {
+  const doc = fakeDocument({ appWindow: { vectorcraft: fakeApp() } });
+  const handle = await mountCraftApp(fakeContainer(), { app: 'vectorcraft', src: '/v/?host=parent', document: doc, timeout: 60_000 });
+  const opening = handle.open(new Uint8Array(1), 'a.bin');
+  const started = Date.now();
+  handle.destroy();
+  await assert.rejects(opening, /destroyed/);
+  assert.ok(Date.now() - started < 1000, 'not after the 60 s timeout');
+  // A 60 s timer left behind would keep this test process alive; node --test would report it.
+});
