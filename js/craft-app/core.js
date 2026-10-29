@@ -177,10 +177,18 @@ export async function mountCraftApp(container, { app, src, storage = null, timeo
   };
   signal?.addEventListener('abort', onAbort, { once: true });
   const deadline = Date.now() + timeout;
+  // The page's storage goes to the frame's window as soon as it holds the app's page (not the
+  // initial about:blank), on every poll, so it is usually there before the app starts. An app that
+  // reads `craftStorage` only once at start-up can still miss it, so it should look again.
+  const handOverStorage = () => {
+    const w = frame.contentWindow;
+    if (storage && w && w.location?.href !== 'about:blank' && w.craftStorage !== storage) w.craftStorage = storage;
+  };
   let window_app = null;
   try {
     while (Date.now() < deadline) {
       if (signal?.aborted) break;
+      handOverStorage();
       window_app = frame.contentWindow?.[app] ?? null;
       if (window_app && typeof window_app.request === 'function') break;
       await new Promise((resolve) => setTimeout(resolve, APP_POLL_MS));
@@ -198,8 +206,7 @@ export async function mountCraftApp(container, { app, src, storage = null, timeo
     giveUp(new Error(error));
   }
 
-  // Hand the page's storage to the frame before anything else can run.
-  if (storage) frame.contentWindow.craftStorage = storage;
+  handOverStorage();
 
   emit('ready', {});
   return handle;

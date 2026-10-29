@@ -189,6 +189,27 @@ test('storage is set on the frame window', async () => {
   handle_destroy(container.appended[0]);
 });
 
+test('storage reaches the frame while it waits for the app, not only once the app answered', async () => {
+  // The frame holds the app's page, but its global appears only later: the storage must be on
+  // the window before then, and never on the initial about:blank.
+  const appWindow = { location: { href: 'about:blank' } };
+  let setWhile = null;
+  let stored;
+  Object.defineProperty(appWindow, 'craftStorage', {
+    get: () => stored,
+    set: (value) => { stored = value; setWhile ??= { appPresent: 'vectorcraft' in appWindow, href: appWindow.location.href }; },
+  });
+  const doc = fakeDocument({ appWindow });
+  const storage = { list() {}, read() {} };
+  const container = fakeContainer();
+  setTimeout(() => { appWindow.location.href = 'https://example.test/v/'; }, 150);
+  setTimeout(() => { appWindow.vectorcraft = fakeApp(); }, 450);
+  await mountCraftApp(container, { app: 'vectorcraft', src: '/v/', document: doc, storage, timeout: 5000 });
+  assert.equal(appWindow.craftStorage, storage);
+  assert.deepEqual(setWhile, { appPresent: false, href: 'https://example.test/v/' }, 'handed over before the app appeared, after about:blank');
+  handle_destroy(container.appended[0]);
+});
+
 test('a thenable from a "foreign realm" is awaited', async () => {
   // The app answers with a plain object with a `then` function — not a Promise. `instanceof`
   // would reject it; the host must await it through Promise.resolve.

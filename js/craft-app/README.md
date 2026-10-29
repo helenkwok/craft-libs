@@ -51,6 +51,8 @@ import { CraftApp } from '@craft/app/react';
 and the events are subscribed with `addEventListener` in an effect — JSX event props on custom
 elements are unreliable after hydration.
 
+The storage becomes the frame's `window.craftStorage` as soon as the frame holds the app's page, and is checked again every 100 ms until the app answers, so it is usually there before the app starts. It is not guaranteed to be there before the app's first code runs: an app that reads `craftStorage` only once at start-up should look again later.
+
 ## Documents and events
 
 The framed build must be loaded with `?host=parent` in `src`: documents and the app's signals then travel as the app's host messages, same-origin `postMessage` between this page and the frame.
