@@ -63,6 +63,19 @@ function fakeDocument({ appWindow }) {
   };
   doc.created = created;
   doc.appWindow = win;
+  // The page's own window: the app's host messages arrive here as `message` events.
+  const pageListeners = [];
+  doc.defaultView = {
+    location: { origin: 'https://page.example' },
+    addEventListener(name, fn) { if (name === 'message') pageListeners.push(fn); },
+    removeEventListener(name, fn) { const i = pageListeners.indexOf(fn); if (i >= 0) pageListeners.splice(i, 1); },
+  };
+  /** The app posting a host message to the page, from `source` (default: the app's window). */
+  doc.appPosts = (data, source = doc.appWindow) => { for (const fn of [...pageListeners]) fn({ source, data }); };
+  doc.pageListeners = pageListeners;
+  // What the page posts to the frame.
+  win.posted = [];
+  win.postMessage = (message, origin) => win.posted.push({ message, origin });
   doc.appendChild = (node) => {
     node.contentWindow = doc.appWindow;
   };
@@ -221,42 +234,61 @@ test('a missing app times out and fires failed', async () => {
   assert.equal(failures.length, 1);
 });
 
-test('dirty and save events are forwarded from the frame', async () => {
+test('the app\'s dirty, save and failed messages reach the handle; other senders are ignored', async () => {
   const api = fakeApp();
   const doc = fakeDocument({ appWindow: { vectorcraft: api } });
   const container = fakeContainer();
-  const handle = await mountCraftApp(container, { app: 'vectorcraft', src: '/v/', document: doc, timeout: 5000 });
+  const handle = await mountCraftApp(container, { app: 'vectorcraft', src: '/v/?host=parent', document: doc, timeout: 5000 });
 
   const seen = [];
-  const off = handle.on('dirty', (detail) => seen.push(['dirty', detail]));
-  const frame = container.appended[0];
-  frame.contentWindow.dispatch('vectorcraft:dirty', { pages: 2 });
+  const off = handle.on('dirty', (detail) => seen.push(detail.dirty));
+  handle.on('save', (detail) => seen.push(['save', detail.id, detail.name]));
+  handle.on('failed', (detail) => seen.push(['failed', detail.error]));
+  doc.appPosts({ type: 'vectorcraft:dirty', dirty: true });
+  doc.appPosts({ type: 'vectorcraft:save', id: 7, name: 'doc.cv', bytes: new ArrayBuffer(4) });
+  doc.appPosts({ type: 'vectorcraft:failed', error: 'too large' });
+  doc.appPosts({ type: 'vectorcraft:dirty', dirty: false }, { other: 'window' }); // not from the frame
+  doc.appPosts({ type: 'gridcraft:dirty', dirty: false }); // another app's message
   off();
-  frame.contentWindow.dispatch('vectorcraft:dirty', { pages: 3 });
-  assert.deepEqual(seen, [['dirty', { pages: 2 }]], 'dirty forwards the detail; off stops it');
-
-  const saved = [];
-  handle.on('save', (detail) => saved.push(detail));
-  frame.contentWindow.dispatch('vectorcraft:save', { at: 1 });
-  assert.deepEqual(saved, [{ at: 1 }]);
+  doc.appPosts({ type: 'vectorcraft:dirty', dirty: false });
+  assert.deepEqual(seen, [true, ['save', 7, 'doc.cv'], ['failed', 'too large']]);
   handle.destroy();
 });
 
-test('the app save hand-over reaches on("save"); on("saved") stays silent (reserved)', async () => {
+test('open waits for ready, then sends bytes, or the File itself when the app reads files', async () => {
   const api = fakeApp();
   const doc = fakeDocument({ appWindow: { vectorcraft: api } });
   const container = fakeContainer();
-  const handle = await mountCraftApp(container, { app: 'vectorcraft', src: '/v/', document: doc, timeout: 5000 });
+  const handle = await mountCraftApp(container, { app: 'vectorcraft', src: '/v/?host=parent', document: doc, timeout: 5000 });
+  const win = doc.appWindow;
+  const file = new Blob(['hello']);
 
-  const save = [];
-  const saved = [];
-  handle.on('save', (detail) => save.push(detail));
-  handle.on('saved', (detail) => saved.push(detail));
-  const frame = container.appended[0];
-  frame.contentWindow.dispatch('vectorcraft:save', { name: 'doc.cv', bytes: 42 });
-  assert.deepEqual(save, [{ name: 'doc.cv', bytes: 42 }], 'the app hand-over reaches on("save")');
-  assert.deepEqual(saved, [], 'nothing reaches on("saved"): reserved for a host-confirmed save');
+  const opening = handle.open(file, 'a.txt');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(win.posted.length, 0, 'nothing is sent before the app is ready');
+  doc.appPosts({ type: 'vectorcraft:ready', version: '1' }); // no `file: true`
+  await opening;
+  const first = win.posted[0];
+  assert.equal(first.origin, 'https://page.example', 'posted to this page\'s own origin only');
+  assert.equal(first.message.type, 'vectorcraft:open');
+  assert.equal(first.message.name, 'a.txt');
+  assert.equal(new TextDecoder().decode(first.message.bytes), 'hello', 'an app without the file form gets bytes');
+  assert.equal(first.message.file, undefined);
   handle.destroy();
+
+  // An app whose ready says it reads files gets the Blob itself, with its size.
+  const doc2 = fakeDocument({ appWindow: { vectorcraft: fakeApp() } });
+  const handle2 = await mountCraftApp(fakeContainer(), { app: 'vectorcraft', src: '/v/?host=parent', document: doc2, timeout: 5000 });
+  doc2.appPosts({ type: 'vectorcraft:ready', version: '1', file: true });
+  await handle2.open(file, 'b.txt');
+  const sent = doc2.appWindow.posted[0].message;
+  assert.equal(sent.file, file);
+  assert.equal(sent.size, 5);
+  assert.equal(sent.bytes, undefined);
+  handle2.saved(7);
+  assert.deepEqual(doc2.appWindow.posted[1].message, { type: 'vectorcraft:saved', id: 7 });
+  handle2.destroy();
+  assert.throws(() => handle2.saved(8), /destroyed/);
 });
 
 test('destroy removes the frame and stops the listeners', async () => {
@@ -268,6 +300,7 @@ test('destroy removes the frame and stops the listeners', async () => {
   container.appended[0].remove = () => { removed += 1; };
   handle.destroy();
   assert.equal(removed, 1, 'destroy removes the frame');
+  assert.equal(doc.pageListeners.length, 0, 'destroy stops listening for the app\'s messages');
   await assert.rejects(() => handle.execute('a.b'), /destroyed/, 'a destroyed handle rejects');
 });
 
@@ -284,32 +317,7 @@ test('a mount that times out removes its frame', async () => {
   container.appended[0].remove = () => { removed += 1; };
   await assert.rejects(mounting, /did not appear in the frame within/);
   assert.equal(removed, 1, 'the caller gets no handle, so the core removes the frame');
-});
-
-test('events on the app\'s own document are forwarded, not the blank one the frame starts with', async () => {
-  const api = fakeApp();
-  const doc = fakeDocument({ appWindow: {} });
-  const container = fakeContainer();
-  const mounting = mountCraftApp(container, { app: 'vectorcraft', src: '/v/', document: doc, timeout: 5000 });
-  // The app loads: its document replaces the frame's first one, and its global appears.
-  const listeners = new Map();
-  const appDocument = {
-    addEventListener(name, fn) { listeners.set(name, [...(listeners.get(name) ?? []), fn]); },
-    removeEventListener(name, fn) { listeners.set(name, (listeners.get(name) ?? []).filter((f) => f !== fn)); },
-    dispatch(name, detail) { for (const fn of listeners.get(name) ?? []) fn({ detail }); },
-  };
-  setTimeout(() => {
-    doc.appWindow.document = appDocument;
-    doc.appWindow.vectorcraft = api;
-  }, 150);
-  const handle = await mounting;
-  const seen = [];
-  handle.on('dirty', (detail) => seen.push(detail));
-  appDocument.dispatch('vectorcraft:dirty', { dirty: true });
-  assert.deepEqual(seen, [{ dirty: true }], 'the listener is on the document the app dispatches on');
-  handle.destroy();
-  appDocument.dispatch('vectorcraft:dirty', { dirty: false });
-  assert.deepEqual(seen, [{ dirty: true }], 'destroy removes it again');
+  assert.equal(doc.pageListeners.length, 0, 'and stops listening for its messages');
 });
 
 test('a mount whose frame throws while loading removes its frame', async () => {

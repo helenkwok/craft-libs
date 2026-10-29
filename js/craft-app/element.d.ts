@@ -13,6 +13,10 @@ export class CraftAppElement extends HTMLElement {
   commands(): Promise<AppResult>;
   inspect(params?: object): Promise<AppResult>;
   screenshot(params?: object): Promise<AppResult>;
+  /** Open a document in the app (see `CraftAppHandle.open`). */
+  open(file: Blob | ArrayBuffer | Uint8Array, name?: string): Promise<void>;
+  /** Confirm a `craft-save` with this `id` is stored. */
+  saved(id: string | number): Promise<void>;
   /** Mount when no app is mounted or mounting; safe to call any number of times (the element
    * also mounts itself on connect). */
   mount(): void;

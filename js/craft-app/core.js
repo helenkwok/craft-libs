@@ -11,6 +11,10 @@
  * Rust crate `craft-web-api` installs. The handle calls those functions, so the app's own method
  * names (its `Methods` table) decide what is sent.
  *
+ * Documents travel over the app's host messages instead (`src` must carry `?host=parent`): the app
+ * posts `<app>:ready`, `<app>:dirty`, `<app>:save` and `<app>:failed` to this window, and the handle
+ * posts `<app>:open` and `<app>:saved` to the frame, all same-origin.
+ *
  * No build step, no dependencies, any realm: every value that comes from the frame is awaited with
  * `Promise.resolve(...)` and never `instanceof`-checked, because a page in a parent frame passes
  * objects from another realm and `instanceof` fails for them.
@@ -36,6 +40,9 @@
  * @property {() => Promise<Object>} commands
  * @property {(params?: Object) => Promise<Object>} inspect
  * @property {(params?: Object) => Promise<Object>} screenshot
+ * @property {(file: Blob|ArrayBuffer|Uint8Array, name?: string) => Promise<void>} open Open a document
+ *   in the app, as File › Open would. Waits for the app's `ready` message.
+ * @property {(id: string|number) => void} saved Confirm that the app's `save` with this id is stored.
  * @property {(event: string, fn: (detail: Object) => void) => () => void} on Subscribe; returns `off`.
  * @property {() => void} destroy
  */
@@ -79,6 +86,27 @@ export async function mountCraftApp(container, { app, src, storage = null, timeo
     return Promise.resolve(fn.apply(frame.contentWindow[app], args));
   };
 
+  // The app's host messages come to this window from the frame. `ready` can arrive before the
+  // app's global does, so the listener is on from the start.
+  const win = doc.defaultView ?? globalThis;
+  let hostReady;
+  const ready = new Promise((resolve) => { hostReady = resolve; });
+  const onMessage = (e) => {
+    if (e.source !== frame.contentWindow) return;
+    const data = e.data;
+    if (!data || typeof data.type !== 'string' || !data.type.startsWith(`${app}:`)) return;
+    const kind = data.type.slice(app.length + 1);
+    if (kind === 'ready') hostReady(data);
+    else if (kind === 'dirty' || kind === 'save' || kind === 'failed') emit(kind, data);
+  };
+  win.addEventListener?.('message', onMessage);
+  offs.push(() => win.removeEventListener?.('message', onMessage));
+  /** Post one host message to the frame; same-origin, so the target is this page's origin. */
+  const post = (type, fields) => {
+    if (destroyed) throw new Error(`${app} handle was destroyed`);
+    frame.contentWindow.postMessage({ type: `${app}:${type}`, ...fields }, win.location.origin);
+  };
+
   const handle = /** @type {CraftAppHandle} */ ({
     app,
     frame,
@@ -89,6 +117,22 @@ export async function mountCraftApp(container, { app, src, storage = null, timeo
     commands: () => call('commands'),
     inspect: (params) => call('docInspect', params ?? {}),
     screenshot: (params) => call('screenshot', params ?? {}),
+    open: async (file, name) => {
+      const info = await Promise.race([
+        ready,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`${app} did not say it is ready for a document`)), timeout)),
+      ]);
+      const blob = typeof file?.arrayBuffer === 'function' && typeof file?.size === 'number';
+      name = name ?? file?.name ?? 'document';
+      if (blob && info.file === true) {
+        post('open', { name, file, size: file.size }); // the app reads it in slices
+        return;
+      }
+      // An app without the `file` form takes bytes (and its size cap applies).
+      const bytes = blob ? await file.arrayBuffer() : file;
+      post('open', { name, bytes });
+    },
+    saved: (id) => post('saved', { id }),
     on: (event, fn) => {
       const list = listeners.get(event) ?? [];
       list.push(fn);
@@ -107,33 +151,19 @@ export async function mountCraftApp(container, { app, src, storage = null, timeo
     },
   });
 
-  // Forward the app's dirty/save signals to this handle's listeners. `save` is the app handing a
-  // file over; `saved` is reserved for a host-confirmed save and is not forwarded (not emitted yet).
-  // The targets are read once the app is ready: before that the frame still holds its first,
-  // blank document, which the app's own document replaces.
-  const attachForwards = () => {
-    const forwards = [];
-    for (const [event, name] of [['dirty', `${app}:dirty`], ['save', `${app}:save`]]) {
-      const forward = (e) => emit(event, /** @type {CustomEvent} */ (e).detail);
-      forwards.push([frame.contentWindow, name, forward]);
-      forwards.push([frame.contentWindow?.document ?? null, name, forward]);
-    }
-    for (const [target, name, fn] of forwards) {
-      if (typeof target?.addEventListener === 'function') target.addEventListener(name, fn);
-      offs.push(() => {
-        if (typeof target?.removeEventListener === 'function') target.removeEventListener(name, fn);
-      });
-    }
-  };
-
   // Wait until the app's global exists with a `request` function. The caller gets no handle when
   // this fails or is aborted, so nothing else could remove the frame: every way out removes it.
   const giveUp = (error) => {
     destroyed = true;
+    for (const off of offs) off();
     frame.remove();
     throw error;
   };
-  const onAbort = () => { destroyed = true; frame.remove(); };
+  const onAbort = () => {
+    destroyed = true;
+    for (const off of offs) off();
+    frame.remove();
+  };
   signal?.addEventListener('abort', onAbort, { once: true });
   const deadline = Date.now() + timeout;
   let window_app = null;
@@ -159,8 +189,6 @@ export async function mountCraftApp(container, { app, src, storage = null, timeo
 
   // Hand the page's storage to the frame before anything else can run.
   if (storage) frame.contentWindow.craftStorage = storage;
-
-  attachForwards();
 
   emit('ready', {});
   return handle;

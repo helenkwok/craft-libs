@@ -169,6 +169,10 @@ export class CraftAppElement extends HTMLElement {
   inspect = this.#forward('inspect');
   /** @type {(params?: Object) => Promise<Object>} */
   screenshot = this.#forward('screenshot');
+  /** @type {(file: Blob|ArrayBuffer|Uint8Array, name?: string) => Promise<void>} */
+  open = this.#forward('open');
+  /** @type {(id: string|number) => Promise<void>} */
+  saved = this.#forward('saved');
 
   /** Tear the mounted app down and empty the element: the element's listeners are unsubscribed
    * and the handle destroyed, which removes the frame. Safe to call twice. After `destroy()`,

@@ -31,11 +31,16 @@ export interface CraftAppHandle {
   commands(): Promise<AppResult>;
   inspect(params?: object): Promise<AppResult>;
   screenshot(params?: object): Promise<AppResult>;
-  /** Subscribe to `dirty` or `save`; returns the unsubscribe function. (`ready` and `failed` fire
-   * before the handle exists: await `mountCraftApp` instead.)
-   * `save` forwards the app's `<app>:save` (the app handing a file over). `saved` is reserved for
-   * a host-confirmed save and is not emitted yet. */
-  on(event: 'dirty' | 'save', fn: (detail: Record<string, unknown>) => void): () => void;
+  /** Open a document in the app, as File › Open would, once the app's `ready` message has come.
+   * A `File`/`Blob` goes as it is when the app's `ready` says `file: true` (the app reads it in
+   * slices); otherwise it is read to bytes and the app's size cap applies. */
+  open(file: Blob | ArrayBuffer | Uint8Array, name?: string): Promise<void>;
+  /** Confirm that the app's `save` with this `id` is stored; until then the app stays dirty. */
+  saved(id: string | number): void;
+  /** Subscribe to `dirty`, `save` (`{id, name, bytes}`: the app handing a file over; answer with
+   * `saved(id)` once it is stored) or `failed` (`{error}`, or `{id, error}` for an unconfirmed save);
+   * returns the unsubscribe function. A failed mount rejects `mountCraftApp` instead. */
+  on(event: 'dirty' | 'save' | 'failed', fn: (detail: Record<string, unknown>) => void): () => void;
   /** Remove the frame and every listener. */
   destroy(): void;
 }

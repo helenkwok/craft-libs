@@ -13,7 +13,7 @@ Plain ES modules, no build step, no dependencies (React is an optional peer for 
 import { mountCraftApp } from '@craft/app';
 
 const app = await mountCraftApp(document.getElementById('host'), {
-  app: 'vectorcraft', src: '/apps/vectorcraft/',
+  app: 'vectorcraft', src: '/apps/vectorcraft/?host=parent',
   storage: myStorage,
 });
 await app.execute('object.rectangle', { width: 100 });
@@ -28,7 +28,7 @@ defineCraftApp();
 ```
 
 ```html
-<craft-app app="vectorcraft" src="/apps/vectorcraft/"></craft-app>
+<craft-app app="vectorcraft" src="/apps/vectorcraft/?host=parent"></craft-app>
 ```
 
 ```js
@@ -42,7 +42,7 @@ el.addEventListener('craft-ready', () => el.execute('object.rectangle', { width:
 ```jsx
 import { CraftApp } from '@craft/app/react';
 
-<CraftApp app="vectorcraft" src="/apps/vectorcraft/"
+<CraftApp app="vectorcraft" src="/apps/vectorcraft/?host=parent"
   storage={myStorage}
   onReady={() => setReady(true)} onDirty={() => setUnsaved(true)} />;
 ```
@@ -51,14 +51,15 @@ import { CraftApp } from '@craft/app/react';
 and the events are subscribed with `addEventListener` in an effect — JSX event props on custom
 elements are unreliable after hydration.
 
-## Events
+## Documents and events
 
-`dirty` and `save` on the handle (`mountCraftApp` itself resolves once the app is ready and
-rejects with the error when it is not); `craft-ready`, `craft-failed` (`{error}`), `craft-dirty`
-and `craft-save` (bubbled, composed) on the element. `dirty`/`save` forward the
-app's `<app>:dirty` / `<app>:save` `CustomEvent`s with their `detail` — `save` is the app handing
-a file over, not a confirmation that anything was stored. `saved` is reserved for a
-host-confirmed save; it is not emitted yet.
+The framed build must be loaded with `?host=parent` in `src`: documents and the app's signals then travel as the app's host messages, same-origin `postMessage` between this page and the frame.
+
+- `open(file, name?)` opens a document as File › Open would, once the app has posted `<app>:ready`. A `File` or `Blob` goes to the app as it is when its `ready` says `file: true` (the app reads it in slices); otherwise it is read to bytes and the app's size cap applies. `ArrayBuffer` and `Uint8Array` go as bytes.
+- `save` (`{id, name, bytes}`) is the app handing a file over: Save, Save As, Export. Store it, then call `saved(id)`; until then the app stays dirty, and after 30 s it reports `failed` with that `id`.
+- `dirty` (`{dirty}`) whenever unsaved changes appear or go away; `failed` (`{error}`) when the app could not take a document or a save went unconfirmed.
+
+On the handle these are `on('dirty' | 'save' | 'failed', fn)`; `mountCraftApp` itself resolves once the app is ready and rejects when it is not. On the element they are `craft-ready`, `craft-failed`, `craft-dirty` and `craft-save` (bubbled, composed), and `open` and `saved` are element methods.
 
 ## Lifecycle: destroy, not disconnect
 
