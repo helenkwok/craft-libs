@@ -24,7 +24,11 @@ export function defineCraftApp(tag = 'craft-app') {
   return CraftAppElement;
 }
 
-export class CraftAppElement extends HTMLElement {
+// A server render (React SSR, TanStack Start) imports this module where no DOM exists: the class
+// must still evaluate there. It is only defined as a custom element in a browser.
+const ElementBase = globalThis.HTMLElement ?? class {};
+
+export class CraftAppElement extends ElementBase {
   static get observedAttributes() {
     return [APP, SRC];
   }
@@ -73,7 +77,10 @@ export class CraftAppElement extends HTMLElement {
 
   attributeChangedCallback(name, oldValue, newValue) {
     if (oldValue === newValue) return;
-    if (name === APP || name === SRC) this.#mount();
+    if (name !== APP && name !== SRC) return;
+    // Without an app or a src there is nothing to show: removing either ends the running app.
+    if (newValue === null) this.#teardown();
+    else this.#mount();
   }
 
   /** Mount (or re-mount after an attribute change). */

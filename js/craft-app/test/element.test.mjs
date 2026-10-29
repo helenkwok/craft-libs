@@ -20,6 +20,11 @@ class FakeElement extends EventTarget {
   getAttribute(name) {
     return this.#attrs.get(name) ?? null;
   }
+  removeAttribute(name) {
+    const old = this.getAttribute(name);
+    this.#attrs.delete(name);
+    if (this.constructor.observedAttributes.includes(name)) this.attributeChangedCallback(name, old, null);
+  }
   setAttribute(name, value) {
     const old = this.getAttribute(name);
     this.#attrs.set(name, value);
@@ -121,5 +126,21 @@ test('mount() after destroy() brings the app back (React StrictMode runs effects
   await ready;
   assert.equal(el.ready, true);
   assert.notEqual(frames.at(-1), first, 'a fresh frame');
+  el.destroy();
+});
+
+test('removing src or app ends the running app', async () => {
+  windows.set('/f/', appWindow('/f/'));
+  const el = element('/f/');
+  await next(el, 'craft-ready');
+  const frame = frames.at(-1);
+  el.removeAttribute('src');
+  assert.equal(frame.removed, 1, 'the frame is removed');
+  assert.equal(el.ready, false);
+  windows.set('/g/', appWindow('/g/'));
+  const ready = next(el, 'craft-ready');
+  el.setAttribute('src', '/g/');
+  await ready;
+  assert.equal((await el.request('x')).src, '/g/', 'setting a src again mounts a fresh app');
   el.destroy();
 });
