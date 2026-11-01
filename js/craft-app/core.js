@@ -95,7 +95,9 @@ export async function mountCraftApp(container, { app, src, storage = null, timeo
   // when its wait settles, so a long-lived handle keeps nothing from opens that finished.
   const waiting = new Set();
   const onMessage = (e) => {
-    if (e.source !== frame.contentWindow) return;
+    // From the frame's window and from this page's own origin: the app is same-origin, so a
+    // message from any other origin is not the app.
+    if (e.source !== frame.contentWindow || e.origin !== win.location.origin) return;
     const data = e.data;
     if (!data || typeof data.type !== 'string' || !data.type.startsWith(`${app}:`)) return;
     const kind = data.type.slice(app.length + 1);

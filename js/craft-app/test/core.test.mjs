@@ -71,7 +71,7 @@ function fakeDocument({ appWindow }) {
     removeEventListener(name, fn) { const i = pageListeners.indexOf(fn); if (i >= 0) pageListeners.splice(i, 1); },
   };
   /** The app posting a host message to the page, from `source` (default: the app's window). */
-  doc.appPosts = (data, source = doc.appWindow) => { for (const fn of [...pageListeners]) fn({ source, data }); };
+  doc.appPosts = (data, source = doc.appWindow, origin = 'https://page.example') => { for (const fn of [...pageListeners]) fn({ source, origin, data }); };
   doc.pageListeners = pageListeners;
   // What the page posts to the frame.
   win.posted = [];
@@ -269,6 +269,7 @@ test('the app\'s dirty, save and failed messages reach the handle; other senders
   doc.appPosts({ type: 'vectorcraft:save', id: 7, name: 'doc.cv', bytes: new ArrayBuffer(4) });
   doc.appPosts({ type: 'vectorcraft:failed', error: 'too large' });
   doc.appPosts({ type: 'vectorcraft:dirty', dirty: false }, { other: 'window' }); // not from the frame
+  doc.appPosts({ type: 'vectorcraft:dirty', dirty: false }, doc.appWindow, 'https://evil.example'); // from the frame's window, but another origin
   doc.appPosts({ type: 'gridcraft:dirty', dirty: false }); // another app's message
   off();
   doc.appPosts({ type: 'vectorcraft:dirty', dirty: false });
